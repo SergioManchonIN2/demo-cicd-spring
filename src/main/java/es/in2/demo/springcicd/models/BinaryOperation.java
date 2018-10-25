@@ -17,6 +17,7 @@ public class BinaryOperation {
     }
 
     public Float divide() {
+        this.result = this.operands.getOperand1() / this.operands.getOperand2();
         return this.result;
     }
 }
