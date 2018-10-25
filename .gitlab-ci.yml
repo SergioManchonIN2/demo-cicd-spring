@@ -42,7 +42,7 @@ build-artifacts:
   - gradle build
   only:
   - develop
-  - release/*
+  - /^release\/.*/
   - master
   - tags
   artifacts:
@@ -72,7 +72,7 @@ build-docker-image:release:
   stage: build-docker
   image: docker:git
   only:
-  - release/*
+  - /^release\/.*/
   services:
   - docker:dind
   tags:
@@ -138,7 +138,7 @@ deploy:staging:
     name: staging
     url: https://staging-demo-cicd.demo.in2.es
   only:
-  - release/*
+  - /^release\/.*/
   variables:
     DOCKER_FILE: 'docker-compose-stag.yml'
     DEPLOYMENT_KEY: $DEPLOYMENT_KEY
