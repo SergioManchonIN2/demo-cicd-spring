@@ -1,0 +1,186 @@
+stages:
+- test
+- review
+- build
+- build-docker
+- release
+- deploy
+
+variables:
+  CONTAINER_IMAGE: $CI_REGISTRY_IMAGE:$CI_BUILD_REF_NAME
+  CONTAINER_RELEASE_IMAGE: $CI_REGISTRY_IMAGE:rc
+  CONTAINER_LATEST_IMAGE: $CI_REGISTRY_IMAGE:latest
+
+test:
+  stage: test
+  image: gradle:latest
+  script:
+  - gradle test
+  artifacts:
+    paths:
+    - build/
+
+sonarqube-publish:
+  stage: review
+  image: registry.in2.es:5005/in2/sonar-scanner-nodejs:2.0.3
+  variables:
+    SONAR_URL: "$SONAR_URL"
+    SONAR_TOKEN: "$SONAR_TOKEN"
+    SONAR_GITLAB_COMMENT: "true"
+    SONAR_ANALYSIS_MODE: "publish"
+    SONAR_SOURCES: "./src"
+    SONAR_BINARIES: "./build"
+  dependencies:
+  - test
+  script:
+  - sonar-scanner-run.sh
+
+build-artifacts:
+  stage: build
+  image: gradle:latest
+  script:
+  - gradle build
+  only:
+  - develop
+  - release/*
+  - master
+  - tags
+  artifacts:
+    paths:
+    - build/
+
+build-docker-image:
+  stage: build-docker
+  image: docker:git
+  only:
+  - tags
+  - master
+  - develop
+  services:
+  - docker:dind
+  tags:
+  - docker
+  dependencies:
+  - build-artifacts
+  before_script:
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+  script:
+  - docker build -t $CONTAINER_IMAGE .
+  - docker push $CONTAINER_IMAGE
+
+build-docker-image:release:
+  stage: build-docker
+  image: docker:git
+  only:
+  - release/*
+  services:
+  - docker:dind
+  tags:
+  - docker
+  dependencies:
+  - build-artifacts
+  before_script:
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+  script:
+  - docker build -t $CONTAINER_RELEASE_IMAGE .
+  - docker push $CONTAINER_RELEASE_IMAGE
+
+release-image:
+  stage: release
+  image: docker:git
+  only:
+  - tags
+  - master
+  services:
+  - docker:dind
+  tags:
+  - docker
+  dependencies:
+  before_script:
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+  script:
+  - docker pull $CONTAINER_IMAGE
+  - docker tag $CONTAINER_IMAGE $CONTAINER_LATEST_IMAGE
+  - docker push $CONTAINER_LATEST_IMAGE
+
+## STAGING
+deploy:develop:
+  stage: deploy
+  image: kinogmt/centos-ssh
+  environment:
+    name: staging
+    url: https://develop-demo-cicd.demo.in2.es
+  only:
+  - develop
+  variables:
+    DOCKER_FILE: 'docker-compose-dev.yml'
+    DEPLOYMENT_KEY: $DEPLOYMENT_KEY
+    DEPLOYMENT_SERVER: $DEPLOYMENT_SERVER
+    DEPLOYMENT_USER: $DEPLOYMENT_USER
+    DEPLOYMENT_PATH: $DEPLOYMENT_STAGING_PATH
+  dependencies:
+  before_script:
+  - mkdir -p ~/.ssh
+  - echo "$DEPLOYMENT_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+  - chmod 600 ~/.ssh/id_rsa
+  - eval "$(ssh-agent -s)"
+  - ssh-add ~/.ssh/id_rsa
+  - ssh-keyscan -H $DEPLOYMENT_SERVER >> ~/.ssh/known_hosts
+  script:
+  - scp -r ./${DOCKER_FILE} ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER}:${DEPLOYMENT_PATH}/
+  - ssh ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER} "cd ${DEPLOYMENT_PATH}; docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}; docker-compose -f ${DOCKER_FILE} stop; docker-compose -f ${DOCKER_FILE} rm app --force; docker-compose -f ${DOCKER_FILE} pull; docker-compose -f ${DOCKER_FILE} up -d"
+
+## STAGING
+deploy:staging:
+  stage: deploy
+  image: kinogmt/centos-ssh
+  environment:
+    name: staging
+    url: https://staging-demo-cicd.demo.in2.es
+  only:
+  - release/*
+  variables:
+    DOCKER_FILE: 'docker-compose-stag.yml'
+    DEPLOYMENT_KEY: $DEPLOYMENT_KEY
+    DEPLOYMENT_SERVER: $DEPLOYMENT_SERVER
+    DEPLOYMENT_USER: $DEPLOYMENT_USER
+    DEPLOYMENT_PATH: $DEPLOYMENT_STAGING_PATH
+  dependencies:
+  before_script:
+  - mkdir -p ~/.ssh
+  - echo "$DEPLOYMENT_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+  - chmod 600 ~/.ssh/id_rsa
+  - eval "$(ssh-agent -s)"
+  - ssh-add ~/.ssh/id_rsa
+  - ssh-keyscan -H $DEPLOYMENT_SERVER >> ~/.ssh/known_hosts
+  script:
+  - scp -r ./${DOCKER_FILE} ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER}:${DEPLOYMENT_PATH}/
+  - ssh ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER} "cd ${DEPLOYMENT_PATH}; docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}; docker-compose -f ${DOCKER_FILE} stop; docker-compose -f ${DOCKER_FILE} rm app --force; docker-compose -f ${DOCKER_FILE} pull; docker-compose -f ${DOCKER_FILE} up -d"
+
+## PROD
+deploy:prod:
+  stage: deploy
+  image: kinogmt/centos-ssh
+  environment:
+    name: prod
+    url: https://prod-demo-cicd.demo.in2.es
+  only:
+  - master
+  when: manual
+  variables:
+    DOCKER_FILE: 'docker-compose.yml'
+    DEPLOYMENT_KEY: $DEPLOYMENT_KEY
+    DEPLOYMENT_SERVER: $DEPLOYMENT_SERVER
+    DEPLOYMENT_USER: $DEPLOYMENT_USER
+    DEPLOYMENT_PATH: $DEPLOYMENT_PROD_PATH
+  dependencies:
+  before_script:
+  - mkdir -p ~/.ssh
+  - echo "$DEPLOYMENT_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+  - chmod 600 ~/.ssh/id_rsa
+  - eval "$(ssh-agent -s)"
+  - ssh-add ~/.ssh/id_rsa
+  - ssh-keyscan -H $DEPLOYMENT_SERVER >> ~/.ssh/known_hosts
+  script:
+  - scp -r ./${DOCKER_FILE} ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER}:${DEPLOYMENT_PATH}/
+  - ssh ${DEPLOYMENT_USER}@${DEPLOYMENT_SERVER} "cd ${DEPLOYMENT_PATH}; docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}; docker-compose -f ${DOCKER_FILE} stop; docker-compose -f ${DOCKER_FILE} rm app --force; docker-compose -f ${DOCKER_FILE} pull; docker-compose -f ${DOCKER_FILE} up -d"
