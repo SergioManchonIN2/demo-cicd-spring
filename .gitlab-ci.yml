@@ -108,7 +108,7 @@ deploy:develop:
   stage: deploy
   image: kinogmt/centos-ssh
   environment:
-    name: staging
+    name: develop
     url: https://develop-demo-cicd.demo.in2.es
   only:
   - develop
